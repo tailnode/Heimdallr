@@ -37,18 +37,29 @@ type limit struct {
 	prisonTime     uint32
 	prisonTimeUnit uint8
 }
-type request struct {
-	m               sync.Mutex
+type reqInfo struct {
+	mutex           sync.Mutex
 	reqTimestamp    *list.List
 	prisonTimestamp int64
 }
-type monitor map[uint64]*request
+type monitor struct {
+	mutex *sync.Mutex
+	info  map[uint64]*reqInfo
+}
 
 var monitors = make(map[string]monitor)
-var monitorLimits = make(map[string]limit)
+var monConfig = make(map[string]limit)
+
+func newMonitor() monitor {
+	m := monitor{
+		mutex: new(sync.Mutex),
+		info:  make(map[uint64]*reqInfo),
+	}
+	return m
+}
 
 func main() {
-	fmt.Println(monitorLimits)
+	fmt.Println(monConfig)
 	for i := 0; i < 15; i++ {
 		r, err := increase("monitor1", 1)
 		fmt.Printf("result: %v, err:%v\n", r, err)
@@ -69,30 +80,31 @@ func init() {
 }
 
 func increase(monName string, id uint64) (result bool, err error) {
-	if _, ok := monitorLimits[monName]; !ok {
+	if _, ok := monConfig[monName]; !ok {
 		return false, errors.New("invalide monitor name")
 	}
 	if _, ok := monitors[monName]; !ok {
-		monitors[monName] = make(monitor)
+		monitors[monName] = newMonitor()
 	}
-	if r, ok := monitors[monName][id]; !ok {
-		// TODO need lock
-		monitors[monName][id] = &request{
-			reqTimestamp: list.New(),
+	if _, ok := monitors[monName].info[id]; !ok {
+		monitors[monName].mutex.Lock()
+		if _, ok := monitors[monName].info[id]; !ok {
+			monitors[monName].info[id] = &reqInfo{
+				reqTimestamp: list.New(),
+			}
 		}
-		monitors[monName][id].reqTimestamp.PushBack(time.Now().Unix())
-		result = true
+		monitors[monName].mutex.Unlock()
+	}
+	r := monitors[monName].info[id]
+	r.mutex.Lock()
+	if r.reqTimestamp.Len() >= monConfig[monName].maxReqCount {
+		result = false
+		err = errors.New("beyond limit")
 	} else {
-		r.m.Lock()
-		if r.reqTimestamp.Len() >= monitorLimits[monName].maxReqCount {
-			result = false
-			err = errors.New("beyond limit")
-		} else {
-			r.reqTimestamp.PushBack(time.Now().Unix())
-			result = true
-		}
-		r.m.Unlock()
+		r.reqTimestamp.PushBack(time.Now().Unix())
+		result = true
 	}
+	r.mutex.Unlock()
 	return
 }
 
@@ -125,7 +137,7 @@ func initMonitors() {
 		} else if prisonTimeUnit, err = parseTimeUnit(v); err != nil {
 			continue
 		}
-		monitorLimits[string(k)] = limit{
+		monConfig[string(k)] = limit{
 			maxReqCount:    maxReqCount,
 			timeUnit:       timeUnit,
 			prisonTime:     uint32(prisonTime),
