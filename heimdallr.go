@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -24,18 +25,11 @@ const (
 	DAY
 )
 
-var unitMap = map[string]uint8{
-	"sec":  SEC,
-	"min":  MIN,
-	"hour": HOUR,
-	"day":  DAY,
-}
-
 type limit struct {
 	maxReqCount    int
-	timeUnit       uint8
+	timeUnit       int8
 	prisonTime     uint32
-	prisonTimeUnit uint8
+	prisonTimeUnit int8
 }
 type reqInfo struct {
 	mutex           sync.Mutex
@@ -43,30 +37,82 @@ type reqInfo struct {
 	prisonTimestamp int64
 }
 type monitor struct {
-	mutex *sync.Mutex
-	info  map[uint64]*reqInfo
+	mutex  *sync.Mutex
+	info   map[uint64]*reqInfo
+	ticker *time.Ticker
 }
 
 var monitors = make(map[string]monitor)
 var monConfig = make(map[string]limit)
+var unitMap = map[string]int8{
+	"sec":  SEC,
+	"min":  MIN,
+	"hour": HOUR,
+	"day":  DAY,
+}
+var exit = make(chan bool)
 
-func newMonitor() monitor {
+func newMonitor(monName string, timeUnit int8) monitor {
+	log.Println("newMonitor", monName)
 	m := monitor{
-		mutex: new(sync.Mutex),
-		info:  make(map[uint64]*reqInfo),
+		mutex:  new(sync.Mutex),
+		info:   make(map[uint64]*reqInfo),
+		ticker: time.NewTicker(getTimeInSec(timeUnit)),
 	}
+	go func() {
+		for {
+			t := <-m.ticker.C
+			log.Println(t)
+			for k, v := range m.info {
+				for e := v.reqTimestamp.Front(); e != nil; {
+					nextElement := e.Next()
+					if time.Now().Unix()-e.Value.(int64) >= int64(getTimeInSec(timeUnit)/time.Second) {
+						log.Printf("remove %v from monitor[%v]id[%v]\n", e.Value.(int64), monName, k)
+						v.reqTimestamp.Remove(e)
+					}
+					e = nextElement
+				}
+			}
+		}
+	}()
 	return m
+}
+
+func getTimeInSec(unit int8) time.Duration {
+	switch unit {
+	case SEC:
+		return time.Second
+	case MIN:
+		return time.Second * 60
+	case HOUR:
+		return time.Second * 60 * 60
+	case DAY:
+		return time.Second * 60 * 60 * 24
+	// can't reach this branch
+	default:
+		return 0
+	}
 }
 
 func main() {
 	fmt.Println(monConfig)
-	for i := 0; i < 15; i++ {
-		r, err := increase("monitor1", 1)
-		fmt.Printf("result: %v, err:%v\n", r, err)
+	for {
+		for i := 0; i < 15; i++ {
+			r, err := increase("monitor1", 1)
+			fmt.Printf("increase monitor1 id[1] result: %v, err:%v\n", r, err)
+			r, err = increase("monitor1", 2)
+			fmt.Printf("increase monitor1 id[2] result: %v, err:%v\n", r, err)
+			r, err = increase("monitor2", 1)
+			fmt.Printf("increase monitor2 id[1] result: %v, err:%v\n", r, err)
+			r, err = increase("monitor2", 2)
+			fmt.Printf("increase monitor2 id[2] result: %v, err:%v\n", r, err)
+		}
+		time.Sleep(time.Second * 2)
 	}
+	<-exit
 }
 
-func parseTimeUnit(s string) (unit uint8, err error) {
+func parseTimeUnit(s string) (unit int8, err error) {
 	ok := true
 	if unit, ok = unitMap[s]; !ok {
 		err = errors.New("invalide unit in config file")
@@ -84,7 +130,7 @@ func increase(monName string, id uint64) (result bool, err error) {
 		return false, errors.New("invalide monitor name")
 	}
 	if _, ok := monitors[monName]; !ok {
-		monitors[monName] = newMonitor()
+		monitors[monName] = newMonitor(monName, monConfig[monName].timeUnit)
 	}
 	if _, ok := monitors[monName].info[id]; !ok {
 		monitors[monName].mutex.Lock()
@@ -110,38 +156,41 @@ func increase(monName string, id uint64) (result bool, err error) {
 
 func initMonitors() {
 	conf.Load("heimdallr")
-	config := conf.GetConf("").(conf.Node)
-	fmt.Println(config)
-	for k, item := range config {
-		var maxReqCount int
-		var prisonTime uint64
-		var timeUnit, prisonTimeUnit uint8
-		var err error
-		if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
-			continue
-		} else if maxReqCount, err = strconv.Atoi(v); err != nil {
-			continue
+	switch config := conf.GetConf("").(type) {
+	case conf.Node:
+		for k, item := range config {
+			var maxReqCount int
+			var prisonTime uint64
+			var prisonTimeUnit, timeUnit int8
+			var err error
+			if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
+				continue
+			} else if maxReqCount, err = strconv.Atoi(v); err != nil {
+				continue
+			}
+			if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
+				continue
+			} else if timeUnit, err = parseTimeUnit(v); err != nil {
+				continue
+			}
+			if v, ok := item.(conf.Node)[PRISON_TIME].(string); !ok {
+				continue
+			} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
+				continue
+			}
+			if v, ok := item.(conf.Node)[PRISON_TIME_UNIT].(string); !ok {
+				continue
+			} else if prisonTimeUnit, err = parseTimeUnit(v); err != nil {
+				continue
+			}
+			monConfig[string(k)] = limit{
+				maxReqCount:    maxReqCount,
+				timeUnit:       timeUnit,
+				prisonTime:     uint32(prisonTime),
+				prisonTimeUnit: prisonTimeUnit,
+			}
 		}
-		if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
-			continue
-		} else if timeUnit, err = parseTimeUnit(v); err != nil {
-			continue
-		}
-		if v, ok := item.(conf.Node)[PRISON_TIME].(string); !ok {
-			continue
-		} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
-			continue
-		}
-		if v, ok := item.(conf.Node)[PRISON_TIME_UNIT].(string); !ok {
-			continue
-		} else if prisonTimeUnit, err = parseTimeUnit(v); err != nil {
-			continue
-		}
-		monConfig[string(k)] = limit{
-			maxReqCount:    maxReqCount,
-			timeUnit:       timeUnit,
-			prisonTime:     uint32(prisonTime),
-			prisonTimeUnit: prisonTimeUnit,
-		}
+	default:
+		log.Println("get config failed")
 	}
 }
