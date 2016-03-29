@@ -2,7 +2,6 @@ package main
 
 import (
 	"conf"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -20,11 +19,12 @@ type limit struct {
 	maxReqCount int
 	timeUnit    uint32
 	prisonTime  uint32
+	mutex       *sync.Mutex
 }
 type reqInfo struct {
-	mutex           sync.Mutex
 	lastReqNanoSec  int64
 	prisonTimestamp int64
+	mutex           *sync.Mutex
 }
 type monitor struct {
 	mutex *sync.Mutex
@@ -46,17 +46,6 @@ func newMonitor(monName string) monitor {
 
 func main() {
 	fmt.Println(monConfig)
-	for {
-		for i := 0; i < 15; i++ {
-			r, err := increase("monitor1", 1)
-			fmt.Printf("increase monitor1 id[1] %v result: %v, err:%v\n", i, r, err)
-		}
-		for i := 0; i < 15; i++ {
-			r, err := increase("monitor1", 1)
-			fmt.Printf("increase monitor1 id[1] %v result: %v, err:%v\n", i, r, err)
-			time.Sleep(time.Millisecond * 100)
-		}
-	}
 	<-exit
 }
 
@@ -65,12 +54,16 @@ func init() {
 	initMonitors()
 }
 
-func increase(monName string, id uint64) (result bool, err error) {
+func increase(monName string, id uint64) (err myError) {
 	if _, ok := monConfig[monName]; !ok {
-		return false, errors.New("invalide monitor name")
+		return newError(ERR_MONNAME_NOT_EXIST)
 	}
 	if _, ok := monitors[monName]; !ok {
-		monitors[monName] = newMonitor(monName)
+		monConfig[monName].mutex.Lock()
+		if _, ok := monitors[monName]; !ok {
+			monitors[monName] = newMonitor(monName)
+		}
+		monConfig[monName].mutex.Unlock()
 	}
 	now := int64(time.Now().UnixNano())
 	if _, ok := monitors[monName].info[id]; !ok {
@@ -78,18 +71,19 @@ func increase(monName string, id uint64) (result bool, err error) {
 		if _, ok := monitors[monName].info[id]; !ok {
 			monitors[monName].info[id] = &reqInfo{
 				lastReqNanoSec: now,
+				mutex:          new(sync.Mutex),
 			}
 		}
 		monitors[monName].mutex.Unlock()
 	} else {
 		r := monitors[monName].info[id]
 		r.mutex.Lock()
+		//log.Println(now, r.lastReqNanoSec, monConfig[monName].maxReqCount, monConfig[monName].timeUnit, int64(time.Second))
 		if (now-r.lastReqNanoSec)*int64(monConfig[monName].maxReqCount) < int64(monConfig[monName].timeUnit)*int64(time.Second) {
-			result = false
-			err = errors.New("beyond limit")
+			err = newError(ERR_BEYOND_LIMIT)
 		} else {
 			r.lastReqNanoSec = now
-			result = true
+			err = newError(ERR_OK)
 		}
 		r.mutex.Unlock()
 	}
@@ -124,6 +118,7 @@ func initMonitors() {
 				maxReqCount: maxReqCount,
 				timeUnit:    uint32(timeUnit),
 				prisonTime:  uint32(prisonTime),
+				mutex:       new(sync.Mutex),
 			}
 		}
 	default:
