@@ -49,23 +49,25 @@ func handler(w http.ResponseWriter, req *http.Request) {
 	monName := ""
 	id := uint64(0)
 	paramInvalide := false
-	ok := false
 
-	if monName, ok := req.Form["monitor_name"]; !ok {
-		paramInvalide := true
-	}
-	if idStr, ok := req.Form["id"]; !ok {
-		paramInvalide := true
+	if monNameArray, ok := req.Form["monitor_name"]; !ok {
+		paramInvalide = true
 	} else {
-		if id, err := strconv.ParseUint(idStr[0], 10, 64); err != nil {
-			paramInvalide := true
+		monName = monNameArray[0]
+	}
+	if idArray, ok := req.Form["id"]; !ok {
+		paramInvalide = true
+	} else {
+		err := error(nil)
+		if id, err = strconv.ParseUint(idArray[0], 10, 64); err != nil {
+			paramInvalide = true
 		}
 	}
 	if paramInvalide {
 		w.Write([]byte("invalide parameter"))
 		return
 	}
-	result := increase(monName[0], id)
+	result := increase(monName, id)
 	w.Write([]byte(result.String()))
 }
 
@@ -73,7 +75,8 @@ func main() {
 	fmt.Println(monConfig)
 
 	http.HandleFunc("/", handler)
-	log.Fatal(http.ListenAndServe(":12345", nil))
+	port := ":" + conf.GetConf("port").(string)
+	log.Fatal(http.ListenAndServe(port, nil))
 	<-exit
 }
 
@@ -102,6 +105,7 @@ func increase(monName string, id uint64) (err myError) {
 				mutex:          new(sync.Mutex),
 			}
 		}
+		err = newError(ERR_OK, 0)
 		monitors[monName].mutex.Unlock()
 	} else {
 		r := monitors[monName].info[id]
@@ -139,32 +143,35 @@ func initMonitors() {
 	switch config := conf.GetConf("").(type) {
 	case conf.Node:
 		for k, item := range config {
-			var maxReqCount int
-			var timeUnit uint64
-			var prisonTime uint64
-			var err error
-			if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
-				continue
-			} else if maxReqCount, err = strconv.Atoi(v); err != nil {
-				continue
-			} else if maxReqCount <= 0 {
-				continue
-			}
-			if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
-				continue
-			} else if timeUnit, err = strconv.ParseUint(v, 10, 32); err != nil {
-				continue
-			}
-			if v, ok := item.(conf.Node)[PRISON_TIME].(string); !ok {
-				continue
-			} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
-				continue
-			}
-			monConfig[string(k)] = limit{
-				maxReqCount: maxReqCount,
-				timeUnit:    uint32(timeUnit),
-				prisonTime:  uint32(prisonTime),
-				mutex:       new(sync.Mutex),
+			switch item.(type) {
+			case conf.Node:
+				var maxReqCount int
+				var timeUnit uint64
+				var prisonTime uint64
+				var err error
+				if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
+					continue
+				} else if maxReqCount, err = strconv.Atoi(v); err != nil {
+					continue
+				} else if maxReqCount <= 0 {
+					continue
+				}
+				if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
+					continue
+				} else if timeUnit, err = strconv.ParseUint(v, 10, 32); err != nil {
+					continue
+				}
+				if v, ok := item.(conf.Node)[PRISON_TIME].(string); !ok {
+					continue
+				} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
+					continue
+				}
+				monConfig[string(k)] = limit{
+					maxReqCount: maxReqCount,
+					timeUnit:    uint32(timeUnit),
+					prisonTime:  uint32(prisonTime),
+					mutex:       new(sync.Mutex),
+				}
 			}
 		}
 	default:
