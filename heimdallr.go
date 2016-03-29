@@ -4,6 +4,7 @@ import (
 	"conf"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -43,9 +44,36 @@ func newMonitor(monName string) monitor {
 	}
 	return m
 }
+func handler(w http.ResponseWriter, req *http.Request) {
+	req.ParseForm()
+	monName := ""
+	id := uint64(0)
+	paramInvalide := false
+	ok := false
+
+	if monName, ok := req.Form["monitor_name"]; !ok {
+		paramInvalide := true
+	}
+	if idStr, ok := req.Form["id"]; !ok {
+		paramInvalide := true
+	} else {
+		if id, err := strconv.ParseUint(idStr[0], 10, 64); err != nil {
+			paramInvalide := true
+		}
+	}
+	if paramInvalide {
+		w.Write([]byte("invalide parameter"))
+		return
+	}
+	result := increase(monName[0], id)
+	w.Write([]byte(result.String()))
+}
 
 func main() {
 	fmt.Println(monConfig)
+
+	http.HandleFunc("/", handler)
+	log.Fatal(http.ListenAndServe(":12345", nil))
 	<-exit
 }
 
