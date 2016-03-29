@@ -85,3 +85,44 @@ func TestParallel(t *testing.T) {
 		t.Errorf("TestParallel failed, should allow %v request, but there are %v\n", 1, sumOk)
 	}
 }
+func TestPrison1(t *testing.T) {
+	fmt.Println("start TestPrison1")
+	id := uint64(0)
+	monName := "monitor3"
+	increase(monName, id) // ok
+	increase(monName, id) // beyond limit, put in prison
+	for i := 0; i < 10; i++ {
+		// in prison
+		if err := increase(monName, id); err.code != ERR_IN_PRISON {
+			t.Errorf("TestPrison1 failed, want [%v] get[%v]\n", ERR_IN_PRISON, err.code)
+		}
+	}
+	time.Sleep(time.Second * 3)
+	// prison time enough, free it
+	if err := increase(monName, id); err.code != ERR_OK {
+		t.Errorf("TestPrison1 failed, want [%v] get[%v]\n", ERR_IN_PRISON, err.code)
+	}
+}
+func TestPrison2(t *testing.T) {
+	fmt.Println("start TestPrison2")
+	id := uint64(0)
+	monName := "monitor4"
+	increase(monName, id) // ok
+	increase(monName, id) // beyond limit, put in prison
+	for i := 0; i < 10; i++ {
+		// in prison
+		if err := increase(monName, id); err.code != ERR_IN_PRISON {
+			t.Errorf("TestPrison2 failed, want [%v] get[%v]\n", ERR_IN_PRISON, err.code)
+		}
+	}
+	time.Sleep(time.Second)
+	// prison time enough, free it, but reentry prison
+	if err := increase(monName, id); err.code != ERR_BEYOND_LIMIT {
+		t.Errorf("TestPrison2 failed, want [%v] get[%v]\n", ERR_BEYOND_LIMIT, err.code)
+	}
+	time.Sleep(time.Second * 2)
+	// prison time enough, free it
+	if err := increase(monName, id); err.code != ERR_OK {
+		t.Errorf("TestPrison2 failed, want [%v] get[%v]\n", ERR_OK, err.code)
+	}
+}

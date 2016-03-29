@@ -23,7 +23,7 @@ type limit struct {
 }
 type reqInfo struct {
 	lastReqNanoSec  int64
-	prisonTimestamp int64
+	inPrisonNanoSec int64
 	mutex           *sync.Mutex
 }
 type monitor struct {
@@ -56,7 +56,7 @@ func init() {
 
 func increase(monName string, id uint64) (err myError) {
 	if _, ok := monConfig[monName]; !ok {
-		return newError(ERR_MONNAME_NOT_EXIST)
+		return newError(ERR_MONNAME_NOT_EXIST, 0)
 	}
 	if _, ok := monitors[monName]; !ok {
 		monConfig[monName].mutex.Lock()
@@ -78,14 +78,30 @@ func increase(monName string, id uint64) (err myError) {
 	} else {
 		r := monitors[monName].info[id]
 		r.mutex.Lock()
+		defer r.mutex.Unlock()
 		//log.Println(now, r.lastReqNanoSec, monConfig[monName].maxReqCount, monConfig[monName].timeUnit, int64(time.Second))
+		// in prison
+		if r.inPrisonNanoSec != 0 && monConfig[monName].prisonTime != 0 {
+			// stay in prison time enough, free it
+			if now-r.inPrisonNanoSec > int64(monConfig[monName].prisonTime)*int64(time.Second) {
+				r.inPrisonNanoSec = 0
+			} else {
+				//stay in prison continue
+				err = newError(ERR_IN_PRISON, int64(monConfig[monName].prisonTime)*int64(time.Second)-now+r.inPrisonNanoSec)
+				return
+			}
+		}
+		// check if beyond limit
 		if (now-r.lastReqNanoSec)*int64(monConfig[monName].maxReqCount) < int64(monConfig[monName].timeUnit)*int64(time.Second) {
-			err = newError(ERR_BEYOND_LIMIT)
+			err = newError(ERR_BEYOND_LIMIT, 0)
+			if monConfig[monName].prisonTime != 0 {
+				// put in prison
+				r.inPrisonNanoSec = now
+			}
 		} else {
 			r.lastReqNanoSec = now
-			err = newError(ERR_OK)
+			err = newError(ERR_OK, 0)
 		}
-		r.mutex.Unlock()
 	}
 	return
 }
@@ -96,12 +112,14 @@ func initMonitors() {
 	case conf.Node:
 		for k, item := range config {
 			var maxReqCount int
-			var prisonTime uint64
 			var timeUnit uint64
+			var prisonTime uint64
 			var err error
 			if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
 				continue
 			} else if maxReqCount, err = strconv.Atoi(v); err != nil {
+				continue
+			} else if maxReqCount <= 0 {
 				continue
 			}
 			if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
