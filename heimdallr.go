@@ -28,8 +28,8 @@ type reqInfo struct {
 	mutex           *sync.Mutex
 }
 type monitor struct {
-	mutex *sync.Mutex
-	info  map[uint64]*reqInfo
+	rwMutex *sync.RWMutex
+	info    map[uint64]*reqInfo
 }
 
 var monitors = make(map[string]monitor)
@@ -39,8 +39,8 @@ var exit = make(chan bool)
 func newMonitor(monName string) monitor {
 	log.Println("newMonitor", monName)
 	m := monitor{
-		mutex: new(sync.Mutex),
-		info:  make(map[uint64]*reqInfo),
+		rwMutex: new(sync.RWMutex),
+		info:    make(map[uint64]*reqInfo),
 	}
 	return m
 }
@@ -89,26 +89,22 @@ func increase(monName string, id uint64) (err myError) {
 	if _, ok := monConfig[monName]; !ok {
 		return newError(ERR_MONNAME_NOT_EXIST, 0)
 	}
-	if _, ok := monitors[monName]; !ok {
-		monConfig[monName].mutex.Lock()
-		if _, ok := monitors[monName]; !ok {
-			monitors[monName] = newMonitor(monName)
-		}
-		monConfig[monName].mutex.Unlock()
-	}
 	now := int64(time.Now().UnixNano())
-	if _, ok := monitors[monName].info[id]; !ok {
-		monitors[monName].mutex.Lock()
+	monitors[monName].rwMutex.RLock()
+	r, ok := monitors[monName].info[id]
+	monitors[monName].rwMutex.RUnlock()
+	if !ok {
+		monitors[monName].rwMutex.Lock()
 		if _, ok := monitors[monName].info[id]; !ok {
 			monitors[monName].info[id] = &reqInfo{
 				lastReqNanoSec: now,
 				mutex:          new(sync.Mutex),
 			}
+			r = monitors[monName].info[id]
 		}
+		monitors[monName].rwMutex.Unlock()
 		err = newError(ERR_OK, 0)
-		monitors[monName].mutex.Unlock()
 	} else {
-		r := monitors[monName].info[id]
 		r.mutex.Lock()
 		defer r.mutex.Unlock()
 		//log.Println(now, r.lastReqNanoSec, monConfig[monName].maxReqCount, monConfig[monName].timeUnit, int64(time.Second))
@@ -166,12 +162,14 @@ func initMonitors() {
 				} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
 					continue
 				}
-				monConfig[string(k)] = limit{
+				monName := string(k)
+				monConfig[monName] = limit{
 					maxReqCount: maxReqCount,
 					timeUnit:    uint32(timeUnit),
 					prisonTime:  uint32(prisonTime),
 					mutex:       new(sync.Mutex),
 				}
+				monitors[monName] = newMonitor(monName)
 			}
 		}
 	default:
