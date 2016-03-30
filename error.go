@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -25,6 +26,11 @@ type myError struct {
 	msg   string
 	extra int64
 }
+type myErrorJson struct {
+	Code  int    `json:"code"`
+	Msg   string `json:"msg"`
+	Extra int64  `json:"extra"`
+}
 
 func (e myError) String() string {
 	if e.code == ERR_IN_PRISON {
@@ -39,4 +45,13 @@ func newError(code int, remainNanoSec int64) myError {
 		code = ERR_INTERAL
 	}
 	return myError{code, errMap[code], remainNanoSec}
+}
+func (e myError) toJson() []byte {
+	eJson := myErrorJson{
+		e.code,
+		e.msg,
+		e.extra,
+	}
+	b, _ := json.Marshal(eJson)
+	return b
 }

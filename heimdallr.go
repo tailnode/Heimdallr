@@ -68,7 +68,7 @@ func handler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	result := increase(monName, id)
-	w.Write([]byte(result.String()))
+	w.Write(result.toJson())
 }
 
 func main() {
