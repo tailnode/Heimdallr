@@ -10,6 +10,7 @@ const (
 	ERR_MONNAME_NOT_EXIST
 	ERR_BEYOND_LIMIT
 	ERR_IN_PRISON
+	ERR_INVALIDE_PARAM
 	ERR_INTERAL
 )
 
@@ -18,6 +19,7 @@ var errMap = map[int]string{
 	ERR_MONNAME_NOT_EXIST: "monitor name not exist",
 	ERR_BEYOND_LIMIT:      "beyond limit",
 	ERR_IN_PRISON:         "in prison",
+	ERR_INVALIDE_PARAM:    "invalide parameter",
 	ERR_INTERAL:           "internal error",
 }
 
