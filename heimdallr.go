@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -33,8 +36,9 @@ type monitor struct {
 }
 
 var monitors = make(map[string]monitor)
-var monConfig = make(map[string]limit)
+var monConfig map[string]limit
 var exit = make(chan bool)
+var loadConfRWMutex = new(sync.RWMutex)
 
 func newMonitor(monName string) monitor {
 	log.Println("newMonitor", monName)
@@ -72,7 +76,14 @@ func handler(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	fmt.Println(monConfig)
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, syscall.SIGUSR1)
+	go func() {
+		for {
+			<-reload
+			reloadConf()
+		}
+	}()
 
 	http.HandleFunc("/", handler)
 	port := ":" + conf.GetConf("port").(string)
@@ -85,7 +96,15 @@ func init() {
 	initMonitors()
 }
 
+func reloadConf() {
+	initMonitors()
+}
+
 func increase(monName string, id uint64) (err myError) {
+	//  read lock for reload config file
+	loadConfRWMutex.RLock()
+	defer loadConfRWMutex.RUnlock()
+
 	if _, ok := monConfig[monName]; !ok {
 		return newError(ERR_MONNAME_NOT_EXIST, 0)
 	}
@@ -135,9 +154,13 @@ func increase(monName string, id uint64) (err myError) {
 }
 
 func initMonitors() {
+
 	conf.Load("heimdallr")
 	switch config := conf.GetConf("").(type) {
 	case conf.Node:
+		loadConfRWMutex.Lock()
+		defer loadConfRWMutex.Unlock()
+		monConfig = make(map[string]limit) // get new config
 		for k, itemRaw := range config {
 			switch item := itemRaw.(type) {
 			case conf.Node:
@@ -169,10 +192,13 @@ func initMonitors() {
 					prisonTime:  uint32(prisonTime),
 					mutex:       new(sync.Mutex),
 				}
-				monitors[monName] = newMonitor(monName)
+				if _, ok := monitors[monName]; !ok {
+					monitors[monName] = newMonitor(monName)
+				}
 			}
 		}
 	default:
 		log.Println("get config failed")
 	}
+	fmt.Println(monConfig)
 }
