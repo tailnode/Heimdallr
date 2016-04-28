@@ -75,14 +75,9 @@ func main() {
 	fmt.Println(monConfig)
 
 	http.HandleFunc("/", handler)
-	port := ":" + conf.GetConf("port").(string)
+	port := ":" + conf.GetConf("heimdallr/heimdallr_http_port").(string)
 	log.Fatal(http.ListenAndServe(port, nil))
 	<-exit
-}
-
-// init monitor infomation from config file
-func init() {
-	initMonitors()
 }
 
 func increase(monName string, id uint64) (err myError) {
@@ -136,45 +131,4 @@ func increase(monName string, id uint64) (err myError) {
 		}
 	}
 	return
-}
-
-func initMonitors() {
-	conf.Load("heimdallr")
-	switch config := conf.GetConf("").(type) {
-	case conf.Node:
-		for k, item := range config {
-			switch item.(type) {
-			case conf.Node:
-				var maxReqCount int
-				var timeUnit uint64
-				var prisonTime uint64
-				var err error
-				if v, ok := item.(conf.Node)[MAX_REQ_COUNT].(string); !ok {
-					continue
-				} else if maxReqCount, err = strconv.Atoi(v); err != nil {
-					continue
-				} else if maxReqCount <= 0 {
-					continue
-				}
-				if v, ok := item.(conf.Node)[TIME_UNIT].(string); !ok {
-					continue
-				} else if timeUnit, err = strconv.ParseUint(v, 10, 32); err != nil {
-					continue
-				}
-				if v, ok := item.(conf.Node)[PRISON_TIME].(string); !ok {
-					continue
-				} else if prisonTime, err = strconv.ParseUint(v, 10, 32); err != nil {
-					continue
-				}
-				monConfig[string(k)] = limit{
-					maxReqCount: maxReqCount,
-					timeUnit:    uint32(timeUnit),
-					prisonTime:  uint32(prisonTime),
-					mutex:       new(sync.Mutex),
-				}
-			}
-		}
-	default:
-		log.Println("get config failed")
-	}
 }
