@@ -2,11 +2,13 @@ package main
 
 import (
 	"conf"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -28,19 +30,20 @@ type reqInfo struct {
 	mutex           *sync.Mutex
 }
 type monitor struct {
-	mutex *sync.Mutex
-	info  map[uint64]*reqInfo
+	rwMutex *sync.RWMutex
+	info    map[uint64]*reqInfo
 }
 
 var monitors = make(map[string]monitor)
-var monConfig = make(map[string]limit)
+var monConfig map[string]limit
 var exit = make(chan bool)
+var loadConfRWMutex = new(sync.RWMutex)
 
 func newMonitor(monName string) monitor {
 	log.Println("newMonitor", monName)
 	m := monitor{
-		mutex: new(sync.Mutex),
-		info:  make(map[uint64]*reqInfo),
+		rwMutex: new(sync.RWMutex),
+		info:    make(map[uint64]*reqInfo),
 	}
 	return m
 }
@@ -64,15 +67,22 @@ func handler(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if paramInvalide {
-		w.Write([]byte("invalide parameter"))
+		w.Write(newError(ERR_INVALIDE_PARAM, 0).toJson())
 		return
 	}
 	result := increase(monName, id)
-	w.Write([]byte(result.String()))
+	w.Write(result.toJson())
 }
 
 func main() {
-	fmt.Println(monConfig)
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, syscall.SIGUSR1)
+	go func() {
+		for {
+			<-reload
+			reloadConf()
+		}
+	}()
 
 	http.HandleFunc("/", handler)
 	port := ":" + conf.GetConf("heimdallr/heimdallr_http_port").(string)
@@ -80,30 +90,34 @@ func main() {
 	<-exit
 }
 
+func reloadConf() {
+	initMonitorsFromConf()
+}
+
 func increase(monName string, id uint64) (err myError) {
+	//  read lock for reload config file
+	loadConfRWMutex.RLock()
+	defer loadConfRWMutex.RUnlock()
+
 	if _, ok := monConfig[monName]; !ok {
 		return newError(ERR_MONNAME_NOT_EXIST, 0)
 	}
-	if _, ok := monitors[monName]; !ok {
-		monConfig[monName].mutex.Lock()
-		if _, ok := monitors[monName]; !ok {
-			monitors[monName] = newMonitor(monName)
-		}
-		monConfig[monName].mutex.Unlock()
-	}
 	now := int64(time.Now().UnixNano())
-	if _, ok := monitors[monName].info[id]; !ok {
-		monitors[monName].mutex.Lock()
+	monitors[monName].rwMutex.RLock()
+	r, ok := monitors[monName].info[id]
+	monitors[monName].rwMutex.RUnlock()
+	if !ok {
+		monitors[monName].rwMutex.Lock()
 		if _, ok := monitors[monName].info[id]; !ok {
 			monitors[monName].info[id] = &reqInfo{
 				lastReqNanoSec: now,
 				mutex:          new(sync.Mutex),
 			}
+			r = monitors[monName].info[id]
 		}
+		monitors[monName].rwMutex.Unlock()
 		err = newError(ERR_OK, 0)
-		monitors[monName].mutex.Unlock()
 	} else {
-		r := monitors[monName].info[id]
 		r.mutex.Lock()
 		defer r.mutex.Unlock()
 		//log.Println(now, r.lastReqNanoSec, monConfig[monName].maxReqCount, monConfig[monName].timeUnit, int64(time.Second))
