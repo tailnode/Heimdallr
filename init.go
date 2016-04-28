@@ -3,6 +3,7 @@ package main
 import (
 	"conf"
 	"fmt"
+	"github.com/garyburd/redigo/redis"
 	"log"
 	"strconv"
 	"sync"
@@ -10,11 +11,39 @@ import (
 
 func init() {
 	conf.Load("conf")
-	initMonitorsFromConf()
+	useRedis := conf.GetConf("heimdallr/use_redis").(string)
+	if useRedis == "1" {
+		redisPort := conf.GetConf("heimdallr/redis_port").(string)
+		redisHost := conf.GetConf("heimdallr/redis_host").(string)
+		redisKey := conf.GetConf("heimdallr/redis_mon_key").(string)
+
+		if redisPort != "" && redisHost != "" && redisKey != "" {
+			initMonitorsFromRedis(redisHost, redisPort, redisKey)
+		} else {
+			log.Fatalln("limits.conf error, can't get redis port/host or key")
+		}
+	} else {
+		initMonitorsFromConf()
+	}
 }
 
 // init monitor infomation from redis
-func initMonitorsFromRedis() {
+func initMonitorsFromRedis(host, port, key string) {
+	c, err := redis.Dial("tcp", host+":"+port)
+	if err != nil {
+		log.Fatalf("connect to redis failed, host[%v] port[%v] err[%v]\n", host, port, err)
+	} else {
+		log.Printf("connect to redis success, host[%v] port[%v]\n", host, port)
+	}
+	defer c.Close()
+
+	reply, err := redis.Values(c.Do("HGETALL", key))
+	if err != nil {
+	}
+	for _, v := range reply {
+		log.Println(string(v.([]byte)))
+		// TODO
+	}
 }
 
 // init monitor infomation from config file
